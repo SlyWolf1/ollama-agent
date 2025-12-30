@@ -1,0 +1,176 @@
+"""
+Examples demonstrating the Ollama Agents SDK features
+"""
+import asyncio
+from ollama_agents import Agent, AgentConfig, AgentHandoff, tool, ThinkingMode, ModelSettings
+
+
+# Example 1: Basic Agent with Thinking Modes
+def basic_agent_example():
+    print("=== Basic Agent with Thinking Modes ===")
+    
+    # Create a simple agent (no thinking mode - compatible with all models)
+    config = AgentConfig(
+        model="qwen3-vl:2b-thinking-q8_0",
+        system_prompt="You are a helpful assistant that explains concepts clearly."
+    )
+    
+    agent = Agent(config)
+    
+    response = agent.chat("What is artificial intelligence?")
+    print(f"Response: {response['content'][:200]}...")
+    print()
+
+
+# Example 2: Agent with Custom Tools
+def tool_usage_example():
+    print("=== Agent with Custom Tools ===")
+    
+    # Define some tools
+    @tool("Calculate the sum of two numbers")
+    def add_numbers(a: int, b: int) -> int:
+        """
+        Calculate the sum of two numbers.
+        
+        Args:
+            a: First number
+            b: Second number
+            
+        Returns:
+            int: The sum of a and b
+        """
+        return a + b
+    
+    @tool("Get the length of a string")
+    def get_length(text: str) -> int:
+        """
+        Get the length of a string.
+        
+        Args:
+            text: Input string
+            
+        Returns:
+            int: Length of the string
+        """
+        return len(text)
+    
+    # Create an agent with tools
+    config = AgentConfig(
+        model="qwen3-vl:2b-thinking-q8_0",
+        system_prompt="You are a helpful calculator assistant."
+    )
+    
+    agent = Agent(config)
+    agent.add_tool(add_numbers)
+    agent.add_tool(get_length)
+    
+    response = agent.chat("What is 15 plus 23?")
+    print(f"Response: {response['content']}")
+    print()
+
+
+# Example 3: Agent Handoff
+def handoff_example():
+    print("=== Agent Handoff Example ===")
+    
+    # Create different specialized agents
+    math_agent_config = AgentConfig(
+        name="Demo",
+        model="qwen3-vl:2b-thinking-q8_0",
+        instructions="You are a math expert who solves mathematical problems.",
+        # model_settings=ModelSettings(thinking_mode=ThinkingMode.HIGH)
+    )
+    math_agent = Agent(math_agent_config)
+    
+    general_agent_config = AgentConfig(
+        name="Demo",
+        model="qwen3-vl:2b-thinking-q8_0", 
+        instructions="You are a general knowledge assistant.",
+        # model_settings=ModelSettings(thinking_mode=ThinkingMode.MEDIUM)
+    )
+    general_agent = Agent(general_agent_config)
+    
+    # Create handoff manager
+    agents = {
+        "math": math_agent,
+        "general": general_agent
+    }
+    handoff_manager = AgentHandoff(agents)
+    
+    # Set initial agent
+    handoff_manager.set_current_agent("general")
+    
+    # Add a handoff rule: if message contains "calculate" or "math", handoff to math agent
+    handoff_manager.add_handoff_rule(
+        lambda msg: "calculate" in msg.lower() or "math" in msg.lower(),
+        "math",
+        priority=1
+    )
+    
+    # Chat with general agent - should trigger handoff
+    response = handoff_manager.chat_with_current("Can you calculate 15 times 25 for me?")
+    print(f"Response: {response['content']}")
+    print()
+
+
+# Example 4: Advanced Thinking Modes
+def thinking_modes_example():
+    print("=== Advanced Thinking Modes ===")
+    
+    # Create agents with different thinking modes
+    quick_agent_config = AgentConfig(
+        name="Demo",
+        model="qwen3-vl:2b-thinking-q8_0",
+        instructions="Provide brief, concise answers.",
+        # model_settings=ModelSettings(thinking_mode=ThinkingMode.LOW)
+    )
+    deep_agent_config = AgentConfig(
+        name="Demo",
+        model="qwen3-vl:2b-thinking-q8_0", 
+        instructions="Provide detailed, comprehensive answers with reasoning.",
+        # model_settings=ModelSettings(thinking_mode=ThinkingMode.HIGH)
+    )
+    
+    quick_agent = Agent(quick_agent_config)
+    deep_agent = Agent(deep_agent_config)
+    
+    question = "Why is the sky blue?"
+    
+    print("Quick thinking response:")
+    quick_response = quick_agent.chat(question)
+    print(f"{quick_response['content'][:150]}...")
+    
+    print("\nDeep thinking response:")
+    deep_response = deep_agent.chat(question)
+    print(f"{deep_response['content'][:150]}...")
+    print()
+
+
+# Example 5: Asynchronous Operations
+async def async_example():
+    print("=== Asynchronous Operations ===")
+    
+    config = AgentConfig(
+        name="Demo",
+        model="qwen3-vl:2b-thinking-q8_0",
+        instructions="You are an async assistant.",
+        # model_settings=ModelSettings(thinking_mode=ThinkingMode.MEDIUM)
+    )
+    
+    agent = Agent(config)
+    
+    response = await agent.achat("What can you tell me about async programming?")
+    print(f"Async response: {response['content'][:150]}...")
+    print()
+
+
+if __name__ == "__main__":
+    basic_agent_example()
+    tool_usage_example()
+    handoff_example()
+    thinking_modes_example()
+    
+    # Run async example
+    asyncio.run(async_example())
+    
+    print("All examples completed!")

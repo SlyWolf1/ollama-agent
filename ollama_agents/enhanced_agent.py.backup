@@ -1,0 +1,762 @@
+"""
+Enhanced Agent class with full tracing, token metrics, and performance tracking
+"""
+import asyncio
+import time
+from typing import Any, Dict, List, Optional, Union, Callable, Sequence
+from dataclasses import dataclass, field
+from enum import Enum
+import ollama
+from .tools import ToolRegistry
+from .thinking import ThinkingMode, ThinkingManager
+from .tracing import get_tracer, TraceLevel, TokenUsage, PerformanceMetrics
+from .model_settings import ModelSettings, DEFAULT_SETTINGS
+from .stats import get_stats_tracker, StatType, TokenUsage as StatsTokenUsage
+from .logging import get_logger
+from .mcp import MCPContext
+from .context_manager import ContextManager, TruncationStrategy, apply_context_management
+
+
+@dataclass
+class AgentConfig:
+    """Configuration for an Agent"""
+    model: str = "llama3.2"
+    system_prompt: Optional[str] = None
+    # Use ModelSettings for comprehensive configuration
+    model_settings: ModelSettings = field(default_factory=lambda: DEFAULT_SETTINGS)
+    tools: Optional[List[Callable]] = None
+    host: Optional[str] = None
+    stream: bool = False
+    keep_alive: Union[float, str, None] = None
+    trace_level: TraceLevel = TraceLevel.STANDARD
+    enable_tracing: bool = True
+    
+    # Context management options
+    max_context_length: int = 20000
+    context_truncation_strategy: TruncationStrategy = TruncationStrategy.SUMMARIZE_MIDDLE
+    
+    @property
+    def temperature(self) -> float:
+        """Backward compatibility: get temperature from model_settings"""
+        return self.model_settings.temperature or 0.7
+    
+    @property
+    def max_tokens(self) -> Optional[int]:
+        """Backward compatibility: get max_tokens from model_settings"""
+        return self.model_settings.max_tokens
+    
+    @property
+    def thinking_mode(self) -> ThinkingMode:
+        """Backward compatibility: get thinking_mode from model_settings"""
+        return self.model_settings.thinking_mode or ThinkingMode.MEDIUM
+
+
+class EnhancedAgent:
+    """
+    Enhanced Ollama Agent with comprehensive tracing, token metrics, and performance tracking
+    """
+    
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.client = ollama.Client(host=config.host)
+        self.async_client = ollama.AsyncClient(host=config.host)
+        self.tool_registry = ToolRegistry()
+        self.thinking_manager = ThinkingManager()
+        
+        # Initialize tracing
+        self.tracer = get_tracer()
+        if config.enable_tracing:
+            self.tracer.set_level(config.trace_level)
+        
+        # Initialize stats tracking
+        self.stats_tracker = get_stats_tracker()
+        self.token_usage = StatsTokenUsage()
+        
+        # Initialize logging
+        self.logger = get_logger()
+        
+        # Initialize MCP context
+        self.mcp_context = MCPContext()
+        
+        # Register any tools provided in config
+        if config.tools:
+            for tool_func in config.tools:
+                self.tool_registry.register_tool(tool_func)
+                # Also register in MCP context
+                self.mcp_context.register_tool_from_registry(self.tool_registry)
+        
+        # Store conversation history
+        self.messages = []
+        if config.system_prompt:
+            self.messages.append({"role": "system", "content": config.system_prompt})
+        
+        # Context management settings
+        self.max_context_length = config.max_context_length  # Max context in characters
+        self.summary_threshold = int(config.max_context_length * 0.75)  # When to trigger summarization (75% of max)
+        self.context_truncation_strategy = config.context_truncation_strategy
+
+    def should_summarize_context(self) -> bool:
+        """Check if the current context should be summarized"""
+        current_length = sum(len(msg.get("content", "")) for msg in self.messages)
+        return current_length > self.summary_threshold
+
+    def summarize_context(self) -> str:
+        """Summarize the current conversation context"""
+        if not self.messages:
+            return ""
+
+        # Create a summary prompt for the LLM to summarize the conversation
+        conversation_text = "\n".join([
+            f"{msg['role']}: {msg['content']}"
+            for msg in self.messages
+            if msg['role'] in ['user', 'assistant']
+        ])
+
+        if len(conversation_text) < 100:  # If conversation is too short, no need to summarize
+            return conversation_text
+
+        # Use the model to generate a summary
+        try:
+            summary_prompt = f"Please provide a concise summary of the following conversation:\n\n{conversation_text}\n\nSummary:"
+            summary_response = self.client.generate(
+                model=self.config.model,
+                prompt=summary_prompt,
+                options={"num_predict": 200, "temperature": 0.3}
+            )
+            return summary_response.response
+        except Exception:
+            # If summarization fails, return a simple truncation
+            return conversation_text[:1000] + "... [truncated]"
+
+    def get_context_summary_message(self) -> Dict[str, str]:
+        """Get a message containing the context summary"""
+        summary = self.summarize_context()
+        return {
+            "role": "system",
+            "content": f"Conversation summary: {summary}"
+        }
+
+    def add_tool(self, func: Callable):
+        """Add a tool to the agent's tool registry"""
+        self.tool_registry.register_tool(func)
+
+    def set_thinking_mode(self, mode: ThinkingMode):
+        """Set the agent's thinking mode"""
+        self.config.model_settings.thinking_mode = mode
+
+    def add_message(self, role: str, content: str):
+        """Add a message to the conversation history"""
+        self.messages.append({"role": role, "content": content})
+
+    def _prepare_tools(self):
+        """Prepare tools for Ollama API call"""
+        return self.tool_registry.get_ollama_tools()
+
+    def _get_think_param(self):
+        """Get the appropriate think parameter based on thinking mode"""
+        if self.config.model_settings.thinking_mode == ThinkingMode.NONE:
+            return None
+        elif self.config.model_settings.thinking_mode == ThinkingMode.LOW:
+            return "low"
+        elif self.config.model_settings.thinking_mode == ThinkingMode.MEDIUM:
+            return "medium"
+        elif self.config.model_settings.thinking_mode == ThinkingMode.HIGH:
+            return "high"
+        else:
+            return None  # Default to None if unknown mode
+
+    def _get_options(self):
+        """Get Ollama options based on configuration and thinking mode"""
+        # Convert ModelSettings to Ollama options
+        options = self.config.model_settings.to_ollama_options()
+
+        # Apply thinking mode configuration if not already set in model_settings
+        if self.config.model_settings.thinking_mode:
+            # If thinking mode is set in model_settings, use it
+            final_options = self.thinking_manager.apply_mode_to_options(
+                self.config.model_settings.thinking_mode, options)
+        else:
+            # Otherwise, use the thinking mode from the config directly
+            final_options = self.thinking_manager.apply_mode_to_options(
+                self.config.thinking_mode, options)
+
+        return final_options
+
+    def chat(self, message: str, tools: Optional[List[Callable]] = None) -> Dict[str, Any]:
+        """
+        Send a message to the agent and get a response
+        """
+        start_time = time.time()
+        
+        self.logger.info(f"Starting chat with message of length {len(message)}", 
+                        agent_id=self.config.model)
+        
+        # Prepare token usage for tracing
+        token_usage = TokenUsage()
+        
+        with self.tracer.span("agent.chat", agent_id=self.config.model, 
+                             data={"message": message, "has_tools": bool(tools)}) as span:
+            # Add user message to history
+            self.add_message("user", message)
+            
+            # Prepare tools
+            all_tools = self._prepare_tools()
+            if tools:
+                temp_registry = ToolRegistry()
+                for tool_func in tools:
+                    temp_registry.register_tool(tool_func)
+                all_tools.extend(temp_registry.get_ollama_tools())
+            
+            # Log tool preparation if tracing is enabled
+            if self.config.enable_tracing and self.config.trace_level in [TraceLevel.STANDARD, TraceLevel.VERBOSE]:
+                self.tracer.log_event("tools.prepared", agent_id=self.config.model, 
+                                     data={"tool_count": len(all_tools)})
+            
+            # Track tool preparation stats
+            self.stats_tracker.increment(StatType.TOOLS_CALLED, len(all_tools), 
+                                       agent_id=self.config.model)
+            
+            # Prepare the API call
+            think_param = self._get_think_param()
+            options = self._get_options()
+            
+            # Log API call preparation
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("api.call.prepared", agent_id=self.config.model, 
+                                     data={"think_param": think_param, "options": options})
+            
+            # Track request made
+            self.stats_tracker.increment(StatType.REQUESTS_MADE, 1, agent_id=self.config.model)
+            
+            # Make the API call
+            response = self.client.chat(
+                model=self.config.model,
+                messages=self.messages,
+                tools=all_tools if all_tools else None,
+                stream=self.config.stream,
+                think=think_param,
+                options=options if options else None,
+                keep_alive=self.config.keep_alive
+            )
+            
+            # Calculate response time
+            response_time = time.time() - start_time
+            
+            # Track response time
+            self.stats_tracker.increment(StatType.RESPONSE_TIME, response_time, 
+                                       agent_id=self.config.model)
+            
+            # Track token usage if available in response
+            prompt_tokens = getattr(response, 'prompt_eval_count', 0) or 0
+            completion_tokens = getattr(response, 'eval_count', 0) or 0
+            total_tokens = prompt_tokens + completion_tokens
+            
+            if prompt_tokens > 0:
+                self.token_usage.add_usage(prompt_tokens=prompt_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_INPUT, prompt_tokens,
+                                           agent_id=self.config.model)
+                token_usage.prompt_tokens = prompt_tokens
+            
+            if completion_tokens > 0:
+                self.token_usage.add_usage(completion_tokens=completion_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_OUTPUT, completion_tokens,
+                                           agent_id=self.config.model)
+                token_usage.completion_tokens = completion_tokens
+                token_usage.total_tokens = total_tokens
+            
+            # Calculate performance metrics
+            performance = PerformanceMetrics()
+            if response_time > 0:
+                performance.response_time = response_time
+                if total_tokens > 0:
+                    performance.tokens_per_second = total_tokens / response_time
+                if prompt_tokens > 0:
+                    performance.input_throughput = prompt_tokens / response_time
+                if completion_tokens > 0:
+                    performance.output_throughput = completion_tokens / response_time
+            
+            # Update span with token usage and performance
+            if span:
+                span.token_usage = token_usage
+                span.performance = performance
+            
+            # Log tool calls if any
+            if hasattr(response.message, 'tool_calls') and response.message.tool_calls:
+                if self.config.enable_tracing and self.config.trace_level in [TraceLevel.STANDARD, TraceLevel.VERBOSE]:
+                    self.tracer.log_event("tool.calls.executed", agent_id=self.config.model, 
+                                         data={"tool_calls": [tc.function.name for tc in response.message.tool_calls]})
+                
+                # Execute tool calls with timing
+                for tool_call in response.message.tool_calls:
+                    tool_name = tool_call.function.name
+                    tool_args = tool_call.function.arguments
+                    
+                    # Execute the tool with timing information
+                    try:
+                        result = self.tool_registry.execute_tool(tool_name, tool_args, self.tracer)
+                        
+                        # Log successful tool execution with timing
+                        self.tracer.log_event(
+                            "tool.execution.completed",
+                            agent_id=self.config.model,
+                            data={
+                                "tool_name": tool_name,
+                                "arguments": tool_args,
+                                "result": str(result)[:200],  # Limit result length in logs
+                                "success": True
+                            }
+                        )
+                    except Exception as e:
+                        # Log failed tool execution
+                        self.tracer.log_event(
+                            "tool.execution.failed", 
+                            agent_id=self.config.model,
+                            data={
+                                "tool_name": tool_name,
+                                "arguments": tool_args,
+                                "error": str(e),
+                                "success": False
+                            }
+                        )
+                
+                # Track successful tool calls
+                self.stats_tracker.increment(StatType.TOOLS_SUCCESS, len(response.message.tool_calls),
+                                           agent_id=self.config.model)
+                
+                self.logger.info(f"Executed {len(response.message.tool_calls)} tool calls", 
+                                agent_id=self.config.model)
+            else:
+                # Track if no tools were called
+                self.stats_tracker.increment(StatType.TOOLS_SUCCESS, 0, agent_id=self.config.model)
+            
+            # Add assistant response to history
+            self.add_message("assistant", response.message.content)
+            
+            # Track conversation turns
+            self.stats_tracker.increment(StatType.CONVERSATION_TURNS, 1, agent_id=self.config.model)
+            
+            # Log the response if tracing is enabled
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("response.received", agent_id=self.config.model, 
+                                     data={"response_length": len(response.message.content),
+                                           "response_time": response_time})
+            
+            result = {
+                "content": response.message.content,
+                "tool_calls": getattr(response.message, 'tool_calls', None),
+                "raw_response": response
+            }
+            
+            # Add result to span data
+            if span is not None:
+                span.data.update({"response_length": len(response.message.content), 
+                                 "has_tool_calls": bool(getattr(response.message, 'tool_calls', None)),
+                                 "response_time": response_time})
+            
+            self.logger.info(f"Chat completed in {response_time:.2f}s, response length: {len(response.message.content)}", 
+                            agent_id=self.config.model)
+            
+            return result
+
+    async def achat(self, message: str, tools: Optional[List[Callable]] = None) -> Dict[str, Any]:
+        """
+        Asynchronously send a message to the agent and get a response
+        """
+        start_time = time.time()
+        
+        # Prepare token usage for tracing
+        token_usage = TokenUsage()
+        
+        with self.tracer.span("agent.achat", agent_id=self.config.model,
+                             data={"message": message, "has_tools": bool(tools)}) as span:
+            # Add user message to history
+            self.add_message("user", message)
+
+            # Prepare tools
+            all_tools = self._prepare_tools()
+            if tools:
+                temp_registry = ToolRegistry()
+                for tool_func in tools:
+                    temp_registry.register_tool(tool_func)
+                all_tools.extend(temp_registry.get_ollama_tools())
+
+            # Log tool preparation if tracing is enabled
+            if self.config.enable_tracing and self.config.trace_level in [TraceLevel.STANDARD, TraceLevel.VERBOSE]:
+                self.tracer.log_event("tools.prepared", agent_id=self.config.model,
+                                     data={"tool_count": len(all_tools)})
+
+            # Track tool preparation stats
+            self.stats_tracker.increment(StatType.TOOLS_CALLED, len(all_tools),
+                                       agent_id=self.config.model)
+
+            # Prepare the API call
+            think_param = self._get_think_param()
+            options = self._get_options()
+
+            # Log API call preparation
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("api.call.prepared", agent_id=self.config.model,
+                                     data={"think_param": think_param, "options": options})
+
+            # Track request made
+            self.stats_tracker.increment(StatType.REQUESTS_MADE, 1, agent_id=self.config.model)
+
+            # Make the async API call
+            response = await self.async_client.chat(
+                model=self.config.model,
+                messages=self.messages,
+                tools=all_tools if all_tools else None,
+                stream=self.config.stream,
+                think=think_param,
+                options=options if options else None,
+                keep_alive=self.config.keep_alive
+            )
+
+            # Calculate response time
+            response_time = time.time() - start_time
+
+            # Track response time
+            self.stats_tracker.increment(StatType.RESPONSE_TIME, response_time,
+                                       agent_id=self.config.model)
+
+            # Track token usage if available in response
+            prompt_tokens = getattr(response, 'prompt_eval_count', 0) or 0
+            completion_tokens = getattr(response, 'eval_count', 0) or 0
+            total_tokens = prompt_tokens + completion_tokens
+
+            if prompt_tokens > 0:
+                self.token_usage.add_usage(prompt_tokens=prompt_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_INPUT, prompt_tokens,
+                                           agent_id=self.config.model)
+                token_usage.prompt_tokens = prompt_tokens
+
+            if completion_tokens > 0:
+                self.token_usage.add_usage(completion_tokens=completion_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_OUTPUT, completion_tokens,
+                                           agent_id=self.config.model)
+                token_usage.completion_tokens = completion_tokens
+                token_usage.total_tokens = total_tokens
+
+            # Calculate performance metrics
+            performance = PerformanceMetrics()
+            if response_time > 0:
+                performance.response_time = response_time
+                if total_tokens > 0:
+                    performance.tokens_per_second = total_tokens / response_time
+                if prompt_tokens > 0:
+                    performance.input_throughput = prompt_tokens / response_time
+                if completion_tokens > 0:
+                    performance.output_throughput = completion_tokens / response_time
+
+            # Update span with token usage and performance
+            if span:
+                span.token_usage = token_usage
+                span.performance = performance
+
+            # Log tool calls if any
+            if hasattr(response.message, 'tool_calls') and response.message.tool_calls:
+                if self.config.enable_tracing and self.config.trace_level in [TraceLevel.STANDARD, TraceLevel.VERBOSE]:
+                    self.tracer.log_event("tool.calls.executed", agent_id=self.config.model,
+                                         data={"tool_calls": [tc.function.name for tc in response.message.tool_calls]})
+
+                # Execute tool calls with timing
+                for tool_call in response.message.tool_calls:
+                    tool_name = tool_call.function.name
+                    tool_args = tool_call.function.arguments
+                    
+                    # Execute the tool with timing information
+                    try:
+                        result = self.tool_registry.execute_tool(tool_name, tool_args, self.tracer)
+                        
+                        # Log successful tool execution with timing
+                        self.tracer.log_event(
+                            "tool.execution.completed",
+                            agent_id=self.config.model,
+                            data={
+                                "tool_name": tool_name,
+                                "arguments": tool_args,
+                                "result": str(result)[:200],  # Limit result length in logs
+                                "success": True
+                            }
+                        )
+                    except Exception as e:
+                        # Log failed tool execution
+                        self.tracer.log_event(
+                            "tool.execution.failed", 
+                            agent_id=self.config.model,
+                            data={
+                                "tool_name": tool_name,
+                                "arguments": tool_args,
+                                "error": str(e),
+                                "success": False
+                            }
+                        )
+
+                # Track successful tool calls
+                self.stats_tracker.increment(StatType.TOOLS_SUCCESS, len(response.message.tool_calls),
+                                           agent_id=self.config.model)
+            else:
+                # Track if no tools were called
+                self.stats_tracker.increment(StatType.TOOLS_SUCCESS, 0, agent_id=self.config.model)
+
+            # Add assistant response to history
+            self.add_message("assistant", response.message.content)
+
+            # Track conversation turns
+            self.stats_tracker.increment(StatType.CONVERSATION_TURNS, 1, agent_id=self.config.model)
+
+            # Log the response if tracing is enabled
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("response.received", agent_id=self.config.model,
+                                     data={"response_length": len(response.message.content),
+                                           "response_time": response_time})
+
+            result = {
+                "content": response.message.content,
+                "tool_calls": getattr(response.message, 'tool_calls', None),
+                "raw_response": response
+            }
+
+            # Add result to span data
+            if span is not None:
+                span.data.update({"response_length": len(response.message.content),
+                                 "has_tool_calls": bool(getattr(response.message, 'tool_calls', None)),
+                                 "response_time": response_time})
+
+            return result
+
+    def generate(self, prompt: str) -> Dict[str, Any]:
+        """
+        Generate content using the agent
+        """
+        start_time = time.time()
+        
+        # Prepare token usage for tracing
+        token_usage = TokenUsage()
+        
+        with self.tracer.span("agent.generate", agent_id=self.config.model, 
+                             data={"prompt_length": len(prompt)}) as span:
+            think_param = self._get_think_param()
+            options = self._get_options()
+            
+            # Log API call preparation
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("api.call.prepared", agent_id=self.config.model, 
+                                     data={"think_param": think_param, "options": options})
+            
+            # Track request made
+            self.stats_tracker.increment(StatType.REQUESTS_MADE, 1, agent_id=self.config.model)
+            
+            response = self.client.generate(
+                model=self.config.model,
+                prompt=prompt,
+                system=self.config.system_prompt,
+                stream=self.config.stream,
+                think=think_param,
+                options=options if options else None,
+                keep_alive=self.config.keep_alive
+            )
+            
+            # Calculate response time
+            response_time = time.time() - start_time
+            
+            # Track response time
+            self.stats_tracker.increment(StatType.RESPONSE_TIME, response_time,
+                                       agent_id=self.config.model)
+            
+            # Track token usage if available in response
+            prompt_tokens = getattr(response, 'prompt_eval_count', 0) or 0
+            completion_tokens = getattr(response, 'eval_count', 0) or 0
+            total_tokens = prompt_tokens + completion_tokens
+            
+            if prompt_tokens > 0:
+                self.token_usage.add_usage(prompt_tokens=prompt_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_INPUT, prompt_tokens,
+                                           agent_id=self.config.model)
+                token_usage.prompt_tokens = prompt_tokens
+            
+            if completion_tokens > 0:
+                self.token_usage.add_usage(completion_tokens=completion_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_OUTPUT, completion_tokens,
+                                           agent_id=self.config.model)
+                token_usage.completion_tokens = completion_tokens
+                token_usage.total_tokens = total_tokens
+            
+            # Calculate performance metrics
+            performance = PerformanceMetrics()
+            if response_time > 0:
+                performance.response_time = response_time
+                if total_tokens > 0:
+                    performance.tokens_per_second = total_tokens / response_time
+                if prompt_tokens > 0:
+                    performance.input_throughput = prompt_tokens / response_time
+                if completion_tokens > 0:
+                    performance.output_throughput = completion_tokens / response_time
+            
+            # Update span with token usage and performance
+            if span:
+                span.token_usage = token_usage
+                span.performance = performance
+            
+            result = {
+                "content": response.response,
+                "raw_response": response
+            }
+            
+            # Log the response if tracing is enabled
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("response.received", agent_id=self.config.model, 
+                                     data={"response_length": len(response.response),
+                                           "response_time": response_time})
+            
+            # Add result to span data
+            if span is not None:
+                span.data.update({"response_length": len(response.response),
+                                 "response_time": response_time})
+            
+            return result
+
+    async def agenerate(self, prompt: str) -> Dict[str, Any]:
+        """
+        Asynchronously generate content using the agent
+        """
+        start_time = time.time()
+        
+        # Prepare token usage for tracing
+        token_usage = TokenUsage()
+        
+        with self.tracer.span("agent.agenerate", agent_id=self.config.model, 
+                             data={"prompt_length": len(prompt)}) as span:
+            think_param = self._get_think_param()
+            options = self._get_options()
+            
+            # Log API call preparation
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("api.call.prepared", agent_id=self.config.model, 
+                                     data={"think_param": think_param, "options": options})
+            
+            # Track request made
+            self.stats_tracker.increment(StatType.REQUESTS_MADE, 1, agent_id=self.config.model)
+            
+            response = await self.async_client.generate(
+                model=self.config.model,
+                prompt=prompt,
+                system=self.config.system_prompt,
+                stream=self.config.stream,
+                think=think_param,
+                options=options if options else None,
+                keep_alive=self.config.keep_alive
+            )
+            
+            # Calculate response time
+            response_time = time.time() - start_time
+            
+            # Track response time
+            self.stats_tracker.increment(StatType.RESPONSE_TIME, response_time,
+                                       agent_id=self.config.model)
+            
+            # Track token usage if available in response
+            prompt_tokens = getattr(response, 'prompt_eval_count', 0) or 0
+            completion_tokens = getattr(response, 'eval_count', 0) or 0
+            total_tokens = prompt_tokens + completion_tokens
+            
+            if prompt_tokens > 0:
+                self.token_usage.add_usage(prompt_tokens=prompt_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_INPUT, prompt_tokens,
+                                           agent_id=self.config.model)
+                token_usage.prompt_tokens = prompt_tokens
+            
+            if completion_tokens > 0:
+                self.token_usage.add_usage(completion_tokens=completion_tokens)
+                self.stats_tracker.increment(StatType.TOKENS_OUTPUT, completion_tokens,
+                                           agent_id=self.config.model)
+                token_usage.completion_tokens = completion_tokens
+                token_usage.total_tokens = total_tokens
+            
+            # Calculate performance metrics
+            performance = PerformanceMetrics()
+            if response_time > 0:
+                performance.response_time = response_time
+                if total_tokens > 0:
+                    performance.tokens_per_second = total_tokens / response_time
+                if prompt_tokens > 0:
+                    performance.input_throughput = prompt_tokens / response_time
+                if completion_tokens > 0:
+                    performance.output_throughput = completion_tokens / response_time
+            
+            # Update span with token usage and performance
+            if span:
+                span.token_usage = token_usage
+                span.performance = performance
+            
+            result = {
+                "content": response.response,
+                "raw_response": response
+            }
+            
+            # Log the response if tracing is enabled
+            if self.config.enable_tracing and self.config.trace_level == TraceLevel.VERBOSE:
+                self.tracer.log_event("response.received", agent_id=self.config.model, 
+                                     data={"response_length": len(response.response),
+                                           "response_time": response_time})
+            
+            # Add result to span data
+            if span is not None:
+                span.data.update({"response_length": len(response.response),
+                                 "response_time": response_time})
+            
+            return result
+
+    def reset_conversation(self):
+        """Reset the conversation history"""
+        self.messages = []
+        if self.config.system_prompt:
+            self.messages.append({"role": "system", "content": self.config.system_prompt})
+
+    def get_tracer(self):
+        """Get the tracer instance for this agent"""
+        return self.tracer
+
+    def get_trace_store(self):
+        """Get the trace store for this agent"""
+        return self.tracer.get_trace_store()
+
+    def export_trace_session(self, session_id: Optional[str] = None) -> str:
+        """Export the trace session to JSON"""
+        return self.tracer.export_session(session_id)
+    
+    def get_stats(self) -> Dict[StatType, float]:
+        """Get current statistics for this agent"""
+        # Get stats for this specific agent
+        return {stat_type: self.stats_tracker.get(stat_type) 
+                for stat_type in StatType}
+    
+    def get_token_usage(self) -> Dict[str, int]:
+        """Get current token usage for this agent"""
+        return self.token_usage.to_dict()
+    
+    def export_stats(self, session_id: Optional[str] = None) -> str:
+        """Export statistics to JSON format"""
+        return self.stats_tracker.export_stats(session_id)
+    
+    def export_stat_records(self) -> str:
+        """Export all stat records to JSON format"""
+        return self.stats_tracker.export_records()
+
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit"""
+        # Perform any cleanup if needed
+        pass
+
+    def __enter__(self):
+        """Sync context manager entry"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Sync context manager exit"""
+        # Perform any cleanup if needed
+        pass
