@@ -25,13 +25,20 @@ class LogLevel(Enum):
 class RichLogger:
     """Logger class for the Ollama Agents SDK with Rich visuals"""
 
-    def __init__(self, name: str = "ollama_agents", level: LogLevel = LogLevel.INFO):
+    def __init__(self, name: str = "ollama_agents", level: LogLevel = LogLevel.INFO, enabled: bool = False):
         self.name = name
         self.console = Console()
+        self.enabled = enabled
 
         # Create a standard logger but use RichHandler for formatting
         self.logger = logging.getLogger(name)
-        self.logger.setLevel(getattr(logging, level.value.upper()))
+        
+        # Set level based on enabled state
+        if enabled:
+            self.logger.setLevel(getattr(logging, level.value.upper()))
+        else:
+            # Disable logging by setting to CRITICAL+1 (higher than any log level)
+            self.logger.setLevel(logging.CRITICAL + 1)
 
         # Prevent adding multiple handlers if logger already exists
         if not self.logger.handlers:
@@ -67,6 +74,9 @@ class RichLogger:
 
     def _log(self, level: int, message: str, agent_id: Optional[str] = None, **kwargs):
         """Internal method to log a message"""
+        if not self.enabled:
+            return
+            
         if agent_id:
             message = f"[bold blue]Agent:[/bold blue] {agent_id} | {message}"
 
@@ -124,17 +134,39 @@ class RichLogger:
 
 # Global logger instance - lazy initialization for better startup performance
 _global_logger = None
+_logging_enabled = False
 
 
 def get_logger() -> RichLogger:
     """Get the global logger instance (lazy initialized)"""
-    global _global_logger
+    global _global_logger, _logging_enabled
     if _global_logger is None:
-        _global_logger = RichLogger()
+        _global_logger = RichLogger(enabled=_logging_enabled)
     return _global_logger
 
 
-def set_global_log_level(level: LogLevel):
-    """Set the global log level"""
+def enable_logging(level: LogLevel = LogLevel.INFO):
+    """Enable logging globally"""
+    global _logging_enabled
+    _logging_enabled = True
     logger = get_logger()
+    logger.enabled = True
+    logger.logger.setLevel(getattr(logging, level.value.upper()))
+
+
+def disable_logging():
+    """Disable logging globally"""
+    global _logging_enabled
+    _logging_enabled = False
+    logger = get_logger()
+    logger.enabled = False
+    logger.logger.setLevel(logging.CRITICAL + 1)
+
+
+def set_global_log_level(level: LogLevel):
+    """Set the global log level and enable logging"""
+    global _logging_enabled
+    _logging_enabled = True
+    logger = get_logger()
+    logger.enabled = True
     logger.logger.setLevel(getattr(logging, level.value.upper()))

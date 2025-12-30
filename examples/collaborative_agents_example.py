@@ -9,7 +9,7 @@ This example demonstrates three specialized agents working together:
 from ollama_agents import (
     Agent, tool, ThinkingMode, ModelSettings,
     TraceLevel, set_global_tracing_level, LogLevel, set_global_log_level, 
-    enable_stats, get_logger
+    enable_stats, get_logger, enable_logging
 )
 from typing import Dict, Any, List
 import json
@@ -19,16 +19,23 @@ import json
 # Configure Logging and Tracing
 # ============================================================================
 
-# Enable comprehensive logging
-set_global_log_level(LogLevel.DEBUG)  # Show all log messages
-set_global_tracing_level(TraceLevel.VERBOSE)  # Detailed tracing
-enable_stats()  # Track statistics
+# Enable comprehensive logging (disabled by default)
+# Uncomment these lines to enable detailed logging:
+# enable_logging()
+# set_global_log_level(LogLevel.DEBUG)  # Show all log messages
+# set_global_tracing_level(TraceLevel.VERBOSE)  # Detailed tracing
+# enable_stats()  # Track statistics
 
 # Get logger instance
 logger = get_logger()
 logger.info("=" * 80)
 logger.info("COLLABORATIVE AGENTS EXAMPLE - STARTING")
 logger.info("=" * 80)
+
+# For this demo, let's enable logging to show what's happening
+enable_logging()
+set_global_log_level(LogLevel.INFO)  # INFO level for cleaner output
+enable_stats()
 
 
 # ============================================================================
@@ -364,31 +371,37 @@ def create_triage_agent(file_agent: Agent, web_agent: Agent) -> Agent:
    Use for: Current events, real-time data, recent news, trending topics, weather, stocks
 
 Your responsibilities:
-- Analyze incoming user queries
+- Analyze incoming user queries  
 - Determine which agent(s) can best answer the query
-- Route queries to the appropriate specialized agent
-- Show the FULL response from the specialized agent to the user
-- If the agent returns an error or says something is unavailable, SHOW THAT MESSAGE
-- Synthesize responses from multiple agents if needed
+- Route queries to the appropriate specialized agent using the routing tools
+- AFTER ROUTING: Present the response you received from the tool to the user
 
 Decision making guidelines:
-- If query needs CURRENT/RECENT information → use Web Search Agent
-- If query needs STORED/HISTORICAL documents → use File Search Agent
-- If query needs BOTH sources → use both agents and combine results
+- If query needs CURRENT/RECENT information → use route_to_web_search
+- If query needs STORED/HISTORICAL documents → use route_to_file_search
+- If query needs BOTH sources → use both tools and combine results
 - If unsure → try File Search first, then Web Search if needed
 
-IMPORTANT: 
-- Always show the complete response from the specialized agent
-- If an agent says "qdrant-client not installed" or any error, relay that message
-- Don't hide error messages - they help the user understand what's needed
-- Present the agent's response clearly, even if it's an error or limitation
+CRITICAL WORKFLOW:
+1. Decide which agent to use
+2. Call the routing tool (route_to_file_search or route_to_web_search)
+3. The tool will return the specialized agent's response
+4. Present that response to the user - it's already the answer!
+5. Don't route again - you already got the answer from the tool
 
-Format your response like:
-"I routed your query to [Agent Name]. Here's their response:
+When presenting responses:
+- Show the complete response from the specialized agent
+- If there's an error message, relay it clearly
+- Be transparent about what happened
+- Format the response clearly for the user
 
-[Full agent response here, including errors or explanations]"
+Example flow:
+User: "Tell me about TFG job shadowing"
+You: *Call route_to_file_search with "TFG job shadowing"*
+Tool returns: "Based on our documents, TFG job shadowing involves..."
+You present: "Based on our internal documents: TFG job shadowing involves..."
 
-Always be transparent about what happened.""",
+Remember: The routing tools return the FINAL ANSWER. Don't route again!"""
         tools=[route_to_file_search, route_to_web_search],
         settings=ModelSettings(
             temperature=0.2,

@@ -2,46 +2,78 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI version](https://badge.fury.io/py/ollama-agents-sdk.svg)](https://badge.fury.io/py/ollama-agents-sdk)
 
-**Advanced agent framework for Ollama with multi-agent collaboration, tool calling, web search, and more.**
+**Production-ready agent framework for Ollama with multi-agent collaboration, tool calling, web search, and advanced memory backends.**
 
-Build intelligent AI agents that can collaborate, use tools, search the web, and manage complex workflows - all powered by local Ollama models.
+Build intelligent AI agents that can collaborate, use tools, search the web, and manage complex workflows - all powered by local Ollama models. No API keys required!
 
-## ✨ Features
+## ✨ Key Features
 
-- 🤝 **Multi-Agent Collaboration** - Coordinate multiple specialized agents
-- 🔧 **Tool Calling** - Automatic tool detection and execution
-- 🌐 **Web Search** - DuckDuckGo integration (no API keys!)
-- 📚 **Vector Store** - Qdrant integration for document search
-- 💾 **Memory** - SQLite and Qdrant memory backends
-- 📊 **Statistics** - Track agent performance and usage
-- 🔀 **Agent Handoffs** - Transfer queries between agents
-- 📝 **Logging & Tracing** - Comprehensive debugging support
-- 🎯 **Thinking Modes** - Optional chain-of-thought reasoning
+### 🤝 Multi-Agent Collaboration
+- **Agent Handoffs** - Seamlessly transfer conversations between specialized agents
+- **Triage Systems** - Route queries to the most appropriate agent
+- **Orchestration Patterns** - Sequential, parallel, and hierarchical agent coordination
+
+### 🔧 Advanced Tool System
+- **Automatic Tool Calling** - Tools are automatically detected and executed
+- **Built-in Tools** - File operations, web scraping, system commands, and more
+- **Custom Tools** - Easy decorator-based tool creation
+- **Tool Collections** - Organize and manage tool sets
+
+### 🌐 Web Search (No API Keys!)
+- **DuckDuckGo Integration** - Built-in web search with Playwright
+- **Search Tools** - Ready-to-use web search capabilities
+- **Custom Search Agents** - Create specialized web search agents
+
+### 📚 Memory & Persistence
+- **Multiple Backends** - SQLite, Redis, PostgreSQL, Qdrant, JSON, In-Memory
+- **Conversation Memory** - Maintain context across sessions
+- **Vector Store Integration** - Qdrant support for semantic search
+- **Automatic Context Management** - Smart truncation and summarization
+
+### 📊 Monitoring & Observability
+- **Comprehensive Logging** - Disabled by default, enable when needed
+- **Rich Console Output** - Beautiful terminal output with Rich
+- **Performance Tracking** - Track tokens, latency, and costs
+- **Statistics & Analytics** - Detailed usage metrics per agent
+
+### 🎯 Thinking Modes (Optional)
+- **Chain-of-Thought** - Optional reasoning for supported models
+- **Configurable Levels** - None, Low, Medium, High
+- **Model-Specific** - Works only with models that support thinking
+
+### ⚡ Performance Features
+- **Caching** - Response caching for repeated queries
+- **Retry Logic** - Configurable retry with exponential backoff
+- **Connection Pooling** - Efficient connection management
+- **Request Batching** - Batch multiple requests for efficiency
 
 ## 🚀 Quick Start
 
 ### Installation
 
 ```bash
+# Basic installation
 pip install ollama-agents-sdk
-```
 
-**For web search functionality:**
-```bash
-pip install playwright
+# With web search support
+pip install ollama-agents-sdk playwright
 playwright install chromium
+
+# With all features (Qdrant vector store)
+pip install ollama-agents-sdk playwright qdrant-client
 ```
 
-### Basic Agent
+### Your First Agent
 
 ```python
 from ollama_agents import Agent, tool
 
 # Define a custom tool
-@tool("Get the weather")
+@tool("Get the weather for a city")
 def get_weather(city: str) -> str:
-    """Get weather for a city"""
+    """Get current weather for a city."""
     return f"The weather in {city} is sunny, 72°F"
 
 # Create an agent
@@ -57,7 +89,7 @@ response = agent.chat("What's the weather in San Francisco?")
 print(response['content'])
 ```
 
-## 📖 Usage Guide
+## 📖 Complete Usage Guide
 
 ### 1. Creating Agents
 
@@ -66,7 +98,7 @@ from ollama_agents import Agent, ModelSettings
 
 agent = Agent(
     name="my_agent",
-    model="qwen2.5-coder:3b-instruct-q8_0",
+    model="qwen2.5-coder:3b-instruct-q8_0",  # Any Ollama model
     instructions="Your agent's system prompt here",
     tools=[],  # Optional: list of tool functions
     settings=ModelSettings(
@@ -77,27 +109,483 @@ agent = Agent(
 )
 ```
 
-### 2. Using Tools
+**Available Models:**
+- `qwen2.5-coder:3b-instruct-q8_0` - Fast, efficient (recommended)
+- `llama3.2` - General purpose
+- `mistral` - Balanced performance
+- `deepseek-coder` - Code-focused
+- Any other Ollama model
 
-Tools are automatically called when needed:
+### 2. Tool Calling
+
+Tools are Python functions that agents can call automatically:
 
 ```python
 from ollama_agents import Agent, tool
 
-@tool("Calculate sum")
+@tool("Calculate sum of two numbers")
 def add(a: int, b: int) -> int:
-    """Add two numbers together"""
+    """Add two numbers together."""
     return a + b
 
-@tool("Calculate product")
+@tool("Calculate product of two numbers")
 def multiply(a: int, b: int) -> int:
-    """Multiply two numbers together"""
+    """Multiply two numbers together."""
     return a * b
 
 agent = Agent(
     name="calculator",
     model="qwen2.5-coder:3b-instruct-q8_0",
-    instructions="You are a calculator. Use the provided tools to perform calculations.",
+    instructions="You are a calculator. Use the provided tools.",
+    tools=[add, multiply]
+)
+
+response = agent.chat("What is 15 times 23?")
+print(response['content'])  # Agent will use multiply tool
+```
+
+### 3. Multi-Agent Collaboration
+
+Create specialized agents that work together:
+
+```python
+from ollama_agents import Agent, tool
+
+# Specialized agent 1
+@tool("Search documents")
+def search_docs(query: str) -> str:
+    return f"Found documents about: {query}"
+
+doc_agent = Agent(
+    name="doc_search",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You search internal documents.",
+    tools=[search_docs]
+)
+
+# Specialized agent 2
+@tool("Search web")
+def search_web(query: str) -> str:
+    return f"Web results for: {query}"
+
+web_agent = Agent(
+    name="web_search",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You search the web.",
+    tools=[search_web]
+)
+
+# Coordinator agent
+@tool("Route to document search")
+def route_to_docs(query: str) -> str:
+    response = doc_agent.chat(query)
+    return response['content']
+
+@tool("Route to web search")
+def route_to_web(query: str) -> str:
+    response = web_agent.chat(query)
+    return response['content']
+
+coordinator = Agent(
+    name="coordinator",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="""You coordinate between document and web search.
+    Route internal queries to docs, external queries to web.""",
+    tools=[route_to_docs, route_to_web]
+)
+
+# Use the coordinator
+response = coordinator.chat("Find our company policies")
+print(response['content'])
+```
+
+### 4. Web Search (Built-in)
+
+Use DuckDuckGo for web search without API keys:
+
+```python
+from ollama_agents import Agent, tool
+from ollama_agents.ddg_search import search_duckduckgo_sync
+import json
+
+@tool("Search the web")
+def web_search(query: str, max_results: int = 5) -> str:
+    """Search the web using DuckDuckGo."""
+    try:
+        results = search_duckduckgo_sync(query, max_results)
+        return results
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+agent = Agent(
+    name="web_searcher",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You search the web and summarize findings.",
+    tools=[web_search]
+)
+
+response = agent.chat("What are the latest AI developments?")
+print(response['content'])
+```
+
+### 5. Memory & Persistence
+
+Add memory to agents for context retention:
+
+```python
+from ollama_agents import Agent, SQLiteMemoryStore
+
+# Create memory store
+memory = SQLiteMemoryStore(db_path="agent_memory.db")
+
+agent = Agent(
+    name="assistant",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You remember past conversations.",
+    enable_memory=True,
+    memory_store=memory
+)
+
+# Conversations are automatically saved and retrieved
+response1 = agent.chat("My name is John")
+response2 = agent.chat("What's my name?")  # Agent remembers!
+```
+
+**Available Memory Backends:**
+- `InMemoryStore` - Temporary (default)
+- `SQLiteMemoryStore` - Local file persistence
+- `RedisMemoryStore` - Redis cache
+- `PostgresMemoryStore` - PostgreSQL database
+- `JSONFileMemoryStore` - Simple JSON files
+
+### 6. Logging & Debugging
+
+Logging is **disabled by default** for performance. Enable when needed:
+
+```python
+from ollama_agents import (
+    Agent, 
+    enable_logging, 
+    set_global_log_level, 
+    LogLevel,
+    enable_stats
+)
+
+# Enable detailed logging
+enable_logging()
+set_global_log_level(LogLevel.DEBUG)  # DEBUG, INFO, WARNING, ERROR
+enable_stats()  # Track performance metrics
+
+agent = Agent(
+    name="assistant",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You are helpful."
+)
+
+response = agent.chat("Hello!")
+# Logs will show detailed execution flow
+```
+
+**Log Levels:**
+- `LogLevel.DEBUG` - Verbose details (development)
+- `LogLevel.INFO` - Key events (recommended)
+- `LogLevel.WARNING` - Warnings only
+- `LogLevel.ERROR` - Errors only
+
+### 7. Model Settings
+
+Fine-tune model behavior:
+
+```python
+from ollama_agents import Agent, ModelSettings
+
+agent = Agent(
+    name="creative_writer",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You are a creative writer.",
+    settings=ModelSettings(
+        temperature=0.9,      # Creativity (0.0-1.0)
+        top_p=0.9,           # Nucleus sampling
+        max_tokens=2000,     # Max response length
+        frequency_penalty=0.5,
+        presence_penalty=0.5,
+        # Note: thinking_mode only works with supported models
+        # thinking_mode=ThinkingMode.MEDIUM  # Optional
+    )
+)
+```
+
+### 8. Performance Optimization
+
+```python
+from ollama_agents import Agent, enable_caching, enable_connection_pooling
+
+# Enable caching for repeated queries
+enable_caching()
+
+# Enable connection pooling
+enable_connection_pooling()
+
+agent = Agent(
+    name="efficient_agent",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You are efficient.",
+    enable_cache=True,
+    enable_retry=True  # Auto-retry on failures
+)
+```
+
+## 🎯 Complete Examples
+
+### Example 1: Collaborative Agents
+
+See `examples/simple_collaborative_agents.py` for a complete example with:
+- File search agent (Qdrant)
+- Web search agent (DuckDuckGo)
+- Triage coordinator agent
+
+### Example 2: Tool-Heavy Agent
+
+```python
+from ollama_agents import Agent, tool
+import os
+import subprocess
+
+@tool("List files in directory")
+def list_files(directory: str = ".") -> str:
+    """List all files in a directory."""
+    try:
+        files = os.listdir(directory)
+        return "\n".join(files)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@tool("Read file contents")
+def read_file(filepath: str) -> str:
+    """Read contents of a file."""
+    try:
+        with open(filepath, 'r') as f:
+            return f.read()
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@tool("Execute shell command")
+def run_command(command: str) -> str:
+    """Execute a shell command safely."""
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=5
+        )
+        return result.stdout or result.stderr
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+agent = Agent(
+    name="system_assistant",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You help with file and system operations. Use tools carefully.",
+    tools=[list_files, read_file, run_command]
+)
+
+response = agent.chat("What files are in the current directory?")
+print(response['content'])
+```
+
+## 📚 Advanced Features
+
+### Vector Store Integration (Qdrant)
+
+```python
+from ollama_agents import Agent, tool
+from qdrant_client import QdrantClient
+import json
+
+@tool("Search vector database")
+def search_vectors(query: str, limit: int = 5) -> str:
+    """Search documents in Qdrant vector store."""
+    client = QdrantClient(host="localhost", port=6333)
+    # Add your embedding logic here
+    results = client.search(
+        collection_name="my_collection",
+        query_vector=[0.0] * 384,  # Your embedding
+        limit=limit
+    )
+    return json.dumps([r.payload for r in results])
+
+agent = Agent(
+    name="doc_searcher",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You search documents using vector similarity.",
+    tools=[search_vectors]
+)
+```
+
+### Orchestration Patterns
+
+```python
+from ollama_agents import AgentOrchestrator, OrchestrationPattern
+
+orchestrator = AgentOrchestrator()
+
+# Sequential execution
+result = orchestrator.orchestrate(
+    agents=[agent1, agent2, agent3],
+    task="Analyze this data",
+    pattern=OrchestrationPattern.SEQUENTIAL
+)
+
+# Parallel execution
+result = orchestrator.orchestrate(
+    agents=[agent1, agent2, agent3],
+    task="Generate ideas",
+    pattern=OrchestrationPattern.PARALLEL
+)
+```
+
+## 🛠️ Configuration
+
+### Environment Variables
+
+```bash
+# Ollama host (default: http://localhost:11434)
+export OLLAMA_HOST=http://localhost:11434
+
+# Enable debug logging
+export OLLAMA_AGENTS_DEBUG=1
+
+# Cache directory
+export OLLAMA_AGENTS_CACHE_DIR=~/.ollama_agents_cache
+```
+
+### Model Configuration
+
+```python
+from ollama_agents import Agent, ModelSettings
+
+# Precise mode (low temperature, deterministic)
+precise_agent = Agent(
+    name="precise",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    settings=ModelSettings(temperature=0.1, top_p=0.1)
+)
+
+# Creative mode (high temperature, varied)
+creative_agent = Agent(
+    name="creative",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    settings=ModelSettings(temperature=0.9, top_p=0.9)
+)
+
+# Balanced mode (default)
+balanced_agent = Agent(
+    name="balanced",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    settings=ModelSettings(temperature=0.7, top_p=0.9)
+)
+```
+
+## 📝 Best Practices
+
+### 1. Logging
+- **Disable by default** - Logging is off for performance
+- **Enable for debugging** - Use `enable_logging()` when developing
+- **Use appropriate levels** - INFO for production, DEBUG for development
+
+### 2. Model Selection
+- **Fast tasks** - `qwen2.5-coder:3b-instruct-q8_0` (3B parameters)
+- **Complex reasoning** - Larger models like `llama3.2:70b`
+- **Code generation** - `deepseek-coder`, `codellama`
+
+### 3. Tool Design
+- **Clear descriptions** - Tools need good docstrings
+- **Type hints** - Use Python type hints for parameters
+- **Error handling** - Return error messages, don't raise exceptions
+
+### 4. Agent Instructions
+- **Be specific** - Clear, detailed instructions work best
+- **Include examples** - Show how to use tools
+- **Set expectations** - Define the agent's role clearly
+
+### 5. Performance
+- **Enable caching** - For repeated queries
+- **Use connection pooling** - For high-throughput applications
+- **Batch requests** - When possible
+
+## 🔧 Troubleshooting
+
+### Issue: Agent doesn't call tools
+- Ensure tool descriptions are clear
+- Check model supports tool calling
+- Verify instructions mention tools
+
+### Issue: Slow performance
+- Enable caching: `enable_caching()`
+- Use smaller models for simple tasks
+- Enable connection pooling
+
+### Issue: Memory usage high
+- Disable logging in production
+- Use context truncation
+- Clear conversation history periodically
+
+### Issue: Qdrant connection failed
+```bash
+# Start Qdrant with Docker
+docker run -p 6333:6333 qdrant/qdrant
+```
+
+### Issue: Web search not working
+```bash
+# Install Playwright browsers
+pip install playwright
+playwright install chromium
+```
+
+## 📦 What's Included
+
+- **Core** - Agent, tool system, handoffs
+- **Tools** - Built-in tools for common tasks
+- **Memory** - Multiple backend options
+- **Search** - DuckDuckGo integration
+- **Logging** - Rich console output
+- **Stats** - Performance tracking
+- **Caching** - Response caching
+- **Retry** - Automatic retry logic
+- **Orchestration** - Multi-agent patterns
+- **Web UI** - Visual agent management (experimental)
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+MIT License - see LICENSE file for details
+
+## 🔗 Links
+
+- **GitHub**: https://github.com/SlyWolf1/ollama-agent
+- **PyPI**: https://pypi.org/project/ollama-agents-sdk/
+- **Issues**: https://github.com/SlyWolf1/ollama-agent/issues
+- **Ollama**: https://ollama.ai
+
+## 📧 Support
+
+- **Email**: brianmanda44@gmail.com
+- **GitHub Issues**: https://github.com/SlyWolf1/ollama-agent/issues
+
+## ⭐ Star History
+
+If you find this project useful, please consider giving it a star on GitHub!
+
+---
+
+**Made with ❤️ for the Ollama community**
     tools=[add, multiply]
 )
 

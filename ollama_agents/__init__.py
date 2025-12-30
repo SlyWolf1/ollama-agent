@@ -9,7 +9,7 @@ from .tracing import TraceLevel, Tracer, get_tracer, set_global_tracing_level, s
 from .model_settings import ModelSettings, DEFAULT_SETTINGS, SIMPLE_CHAT_SETTINGS, CREATIVE_SETTINGS, PRECISE_SETTINGS
 from .utils import create_agent_with_settings, merge_settings, create_specialized_agent, AgentSession
 from .stats import StatsTracker, TokenUsage, get_stats_tracker, StatType, enable_stats, disable_stats
-from .logger import RichLogger as Logger, get_logger, set_global_log_level, LogLevel
+from .logger import RichLogger as Logger, get_logger, set_global_log_level, LogLevel, enable_logging, disable_logging
 from .mcp import MCPContext, MCPContextManager, MCPResource, MCPResourceType, MCPToolAdapter
 from .context_manager import ContextManager, TruncationStrategy
 from .caching import ResponseCache, CacheStrategy, enable_caching, disable_caching, get_cache
@@ -36,7 +36,7 @@ from .web_ui import AgentManager, create_web_ui
 # Create AgentConfig alias for backward compatibility
 AgentConfig = Agent
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "Agent", "AgentConfig", "AgentHandoff", "ToolRegistry", "tool", 
     "ThinkingMode", "ThinkingManager",
@@ -45,7 +45,7 @@ __all__ = [
     "ModelSettings", "DEFAULT_SETTINGS", "SIMPLE_CHAT_SETTINGS", "CREATIVE_SETTINGS", "PRECISE_SETTINGS",
     "create_agent_with_settings", "merge_settings", "create_specialized_agent", "AgentSession",
     "StatsTracker", "TokenUsage", "get_stats_tracker", "StatType", "enable_stats", "disable_stats",
-    "Logger", "get_logger", "set_global_log_level", "LogLevel",
+    "Logger", "get_logger", "set_global_log_level", "LogLevel", "enable_logging", "disable_logging",
     "MCPContext", "MCPContextManager", "MCPResource", "MCPResourceType", "MCPToolAdapter",
     "ContextManager", "TruncationStrategy",
     "ResponseCache", "CacheStrategy", "enable_caching", "disable_caching", "get_cache",
