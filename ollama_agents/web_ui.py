@@ -15,8 +15,10 @@ except ImportError:
     FLASK_AVAILABLE = False
 
 from .agent import Agent
-from .stats import get_stats
-from .logger import logger
+from .stats import get_stats_tracker
+from .logger import get_logger
+
+logger = get_logger()
 
 
 class AgentManager:
@@ -375,7 +377,7 @@ def create_web_ui(agent_manager: AgentManager, host: str = "0.0.0.0", port: int 
     
     @app.route('/api/stats')
     def api_stats():
-        stats = get_stats()
+        stats = get_stats_tracker().get_all_stats()
         if stats:
             return jsonify(asdict(stats))
         return jsonify({})

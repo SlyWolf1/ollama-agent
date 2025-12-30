@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import OrderedDict
 import threading
-from .logger import logger
+from .logger import get_logger
+
+logger = get_logger()
 
 
 @dataclass

@@ -7,7 +7,9 @@ from typing import List, Dict, Any, Callable, Optional
 from dataclasses import dataclass
 from enum import Enum
 from .agent import Agent
-from .logger import logger
+from .logger import get_logger
+
+logger = get_logger()
 
 
 class OrchestrationPattern(Enum):
