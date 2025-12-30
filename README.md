@@ -431,13 +431,41 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Documentation: [Full docs](https://github.com/SlyWolf1/ollama-agent#readme)
 - Email: brianmanda44@gmail.com
 
-## 🗺️ Roadmap
+## 🎉 New in v0.2.0
 
-- [ ] More memory backends
-- [ ] Advanced agent orchestration patterns
-- [ ] Web UI for agent management
-- [ ] More built-in tools
-- [ ] Performance optimizations
+### ✅ More Memory Backends
+- MongoDB memory store
+- JSON file memory store (portable)
+- Existing: SQLite, Redis, PostgreSQL, Qdrant
+
+### ✅ Advanced Orchestration Patterns
+- **Sequential**: Pass output from one agent to the next
+- **Parallel**: Run agents simultaneously and aggregate results
+- **Hierarchical**: Coordinator delegates to worker agents
+- **Consensus**: Agents vote to reach agreement
+- **Debate**: Agents argue to find best answer
+- **Pipeline**: Chain agents with transformations
+
+### ✅ Web UI for Agent Management
+- Beautiful web interface at `http://localhost:5000`
+- Chat with multiple agents
+- Switch between agents
+- View conversation history
+- Monitor statistics
+
+### ✅ Built-in Tools
+- **File Tools**: read_file, write_file, list_directory
+- **Web Tools**: http_get, http_post
+- **System Tools**: execute_command, get_current_time, get_env_var
+- **Data Tools**: parse_json, format_json, calculate
+- **Text Tools**: count_words, count_characters, to_uppercase, to_lowercase
+
+### ✅ Performance Optimizations
+- LRU cache with size limits
+- Request batching
+- Connection pooling
+- Response caching with TTL
+- Memory-efficient caching
 
 ## 📈 Version History
 
@@ -446,3 +474,177 @@ See [CHANGELOG.md](CHANGELOG.md) for version history and updates.
 ---
 
 **Made with ❤️ for the Ollama community**
+
+### 9. Built-in Tools
+
+Use ready-made tools for common tasks:
+
+```python
+from ollama_agents import Agent, get_tool_collection
+
+# Get all file tools
+file_agent = Agent(
+    name="file_assistant",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="Help with file operations",
+    tools=get_tool_collection("file")  # read_file, write_file, list_directory
+)
+
+# Get all text tools
+text_agent = Agent(
+    name="text_processor",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="Process text",
+    tools=get_tool_collection("text")  # count_words, to_uppercase, etc
+)
+
+# Get ALL built-in tools
+multi_agent = Agent(
+    name="multi_agent",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="Versatile assistant",
+    tools=get_tool_collection("all")
+)
+```
+
+Available collections: `"file"`, `"web"`, `"system"`, `"data"`, `"text"`, `"all"`
+
+### 10. Advanced Orchestration
+
+Coordinate multiple agents with various patterns:
+
+```python
+from ollama_agents import Agent, orchestrate, OrchestrationPattern, AgentOrchestrator
+
+researcher = Agent(name="researcher", model="qwen2.5-coder:3b-instruct-q8_0", instructions="Research topics")
+analyst = Agent(name="analyst", model="qwen2.5-coder:3b-instruct-q8_0", instructions="Analyze information")
+writer = Agent(name="writer", model="qwen2.5-coder:3b-instruct-q8_0", instructions="Write content")
+
+# Sequential: researcher → analyst → writer
+result = orchestrate(
+    agents=[researcher, analyst, writer],
+    query="Explain quantum computing",
+    pattern=OrchestrationPattern.SEQUENTIAL
+)
+
+# Parallel: all agents run simultaneously
+result = orchestrate(
+    agents=[researcher, analyst, writer],
+    query="What is AI?",
+    pattern=OrchestrationPattern.PARALLEL
+)
+
+# Debate: agents argue to find best answer
+orchestrator = AgentOrchestrator([agent1, agent2])
+result = orchestrator.debate(
+    query="Should we adopt AI?",
+    rounds=2
+)
+
+# Consensus: agents vote
+result = orchestrator.consensus(
+    query="What is 2+2?",
+    threshold=0.6
+)
+```
+
+### 11. Web UI
+
+Launch a web interface to manage agents:
+
+```python
+from ollama_agents import Agent, AgentManager, create_web_ui, get_tool_collection
+
+# Create manager
+manager = AgentManager()
+
+# Add agents
+assistant = Agent(name="assistant", model="qwen2.5-coder:3b-instruct-q8_0", instructions="General assistant")
+coder = Agent(name="coder", model="qwen2.5-coder:3b-instruct-q8_0", instructions="Coding help", tools=get_tool_collection("data"))
+
+manager.add_agent(assistant)
+manager.add_agent(coder)
+
+# Start web UI
+create_web_ui(manager, host="0.0.0.0", port=5000)
+# Open http://localhost:5000 in your browser
+```
+
+**Web UI Features:**
+- 💬 Chat with multiple agents
+- 🔄 Switch between agents seamlessly
+- 📜 View full conversation history
+- 📊 Monitor agent statistics
+- 🎨 Beautiful, responsive interface
+
+### 12. Performance Optimization
+
+Enable caching and performance features:
+
+```python
+from ollama_agents import Agent
+from ollama_agents.performance import enable_response_caching, LRUCache
+
+# Enable response caching (saves duplicate API calls)
+enable_response_caching(max_size=1000, ttl_seconds=3600)
+
+agent = Agent(name="assistant", model="qwen2.5-coder:3b-instruct-q8_0", instructions="Helper")
+
+# First call - hits API
+response1 = agent.chat("What is Python?")
+
+# Second call - uses cache!
+response2 = agent.chat("What is Python?")
+
+# Use LRU cache for custom data
+cache = LRUCache(max_size=100, max_memory_mb=10)
+cache.set("key", "value")
+value = cache.get("key")
+```
+
+### 13. More Memory Backends
+
+Choose from multiple memory storage options:
+
+```python
+from ollama_agents import Agent
+from ollama_agents.memory import (
+    SQLiteMemoryStore,
+    RedisMemoryStore,
+    PostgresMemoryStore,
+    MongoDBMemoryStore,
+    JSONFileMemoryStore
+)
+
+# SQLite (file-based, portable)
+memory = SQLiteMemoryStore("agent_memory.db")
+
+# Redis (fast, in-memory)
+memory = RedisMemoryStore(host="localhost", port=6379)
+
+# PostgreSQL (robust, scalable)
+memory = PostgresMemoryStore(
+    host="localhost",
+    database="agents",
+    user="user",
+    password="pass"
+)
+
+# MongoDB (flexible, document-based)
+memory = MongoDBMemoryStore(
+    connection_string="mongodb://localhost:27017/",
+    database="agents"
+)
+
+# JSON File (simple, human-readable)
+memory = JSONFileMemoryStore("memory.json")
+
+# Use with agent
+agent = Agent(
+    name="assistant",
+    model="qwen2.5-coder:3b-instruct-q8_0",
+    instructions="You remember conversations",
+    memory=memory
+)
+```
+

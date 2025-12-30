@@ -1,4 +1,23 @@
+# Core dependencies
 ollama>=0.6.1
 rich>=13.0.0
-qdrant-client>=1.0.0
+
+# Web search
 playwright>=1.40.0
+requests>=2.31.0
+
+# Vector store
+qdrant-client>=1.0.0
+
+# Optional memory backends
+pymongo>=4.0.0  # MongoDB
+redis>=5.0.0  # Redis  
+psycopg2-binary>=2.9.0  # PostgreSQL
+
+# Web UI
+flask>=3.0.0
+
+# Performance (already included with Python)
+# - threading
+# - hashlib
+# - json

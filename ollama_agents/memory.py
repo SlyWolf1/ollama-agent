@@ -600,3 +600,237 @@ def set_memory_manager(manager: MemoryManager):
     """Set the global memory manager instance"""
     global _default_memory_manager
     _default_memory_manager = manager
+
+# MongoDB Memory Store
+try:
+    from pymongo import MongoClient
+    MONGODB_AVAILABLE = True
+except ImportError:
+    MONGODB_AVAILABLE = False
+
+
+if MONGODB_AVAILABLE:
+    class MongoDBMemoryStore(MemoryStore):
+        """MongoDB-based memory store"""
+        
+        def __init__(self, connection_string: str = "mongodb://localhost:27017/", database: str = "ollama_agents"):
+            self.client = MongoClient(connection_string)
+            self.db = self.client[database]
+            self.collection = self.db['memories']
+            self._create_indexes()
+        
+        def _create_indexes(self):
+            """Create indexes for better performance"""
+            self.collection.create_index([("agent_id", 1), ("key", 1)])
+            self.collection.create_index([("expires_at", 1)])
+            self.collection.create_index([("timestamp", -1)])
+        
+        def store(self, entry: MemoryEntry) -> None:
+            doc = entry.to_dict()
+            doc['_id'] = entry.id
+            self.collection.replace_one({'_id': entry.id}, doc, upsert=True)
+        
+        def retrieve(self, agent_id: str, key: str) -> Optional[MemoryEntry]:
+            doc = self.collection.find_one({
+                'agent_id': agent_id,
+                'key': key,
+                '$or': [
+                    {'expires_at': None},
+                    {'expires_at': {'$gt': datetime.now().isoformat()}}
+                ]
+            })
+            
+            if doc:
+                return MemoryEntry(
+                    id=doc['_id'],
+                    agent_id=doc['agent_id'],
+                    key=doc['key'],
+                    value=doc['value'],
+                    timestamp=datetime.fromisoformat(doc['timestamp']),
+                    metadata=doc.get('metadata', {}),
+                    expires_at=datetime.fromisoformat(doc['expires_at']) if doc.get('expires_at') else None
+                )
+            return None
+        
+        def retrieve_all(self, agent_id: str, limit: Optional[int] = None) -> List[MemoryEntry]:
+            query = {
+                'agent_id': agent_id,
+                '$or': [
+                    {'expires_at': None},
+                    {'expires_at': {'$gt': datetime.now().isoformat()}}
+                ]
+            }
+            
+            cursor = self.collection.find(query).sort('timestamp', -1)
+            if limit:
+                cursor = cursor.limit(limit)
+            
+            return [
+                MemoryEntry(
+                    id=doc['_id'],
+                    agent_id=doc['agent_id'],
+                    key=doc['key'],
+                    value=doc['value'],
+                    timestamp=datetime.fromisoformat(doc['timestamp']),
+                    metadata=doc.get('metadata', {}),
+                    expires_at=datetime.fromisoformat(doc['expires_at']) if doc.get('expires_at') else None
+                )
+                for doc in cursor
+            ]
+        
+        def delete(self, agent_id: str, key: str) -> None:
+            self.collection.delete_one({'agent_id': agent_id, 'key': key})
+        
+        def clear(self, agent_id: str) -> None:
+            self.collection.delete_many({'agent_id': agent_id})
+        
+        def search(self, agent_id: str, query: str, limit: int = 10) -> List[MemoryEntry]:
+            """Full-text search in MongoDB"""
+            results = self.collection.find({
+                'agent_id': agent_id,
+                '$text': {'$search': query}
+            }).limit(limit)
+            
+            return [
+                MemoryEntry(
+                    id=doc['_id'],
+                    agent_id=doc['agent_id'],
+                    key=doc['key'],
+                    value=doc['value'],
+                    timestamp=datetime.fromisoformat(doc['timestamp']),
+                    metadata=doc.get('metadata', {}),
+                    expires_at=datetime.fromisoformat(doc['expires_at']) if doc.get('expires_at') else None
+                )
+                for doc in results
+            ]
+
+
+# JSON File Memory Store
+class JSONFileMemoryStore(MemoryStore):
+    """JSON file-based memory store - simple, portable"""
+    
+    def __init__(self, file_path: str = "agent_memory.json"):
+        self.file_path = file_path
+        self._lock = threading.Lock()
+        self._load()
+    
+    def _load(self):
+        """Load memories from file"""
+        try:
+            with open(self.file_path, 'r') as f:
+                data = json.load(f)
+                self._memories = data
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._memories = {}
+    
+    def _save(self):
+        """Save memories to file"""
+        with open(self.file_path, 'w') as f:
+            json.dump(self._memories, f, indent=2, default=str)
+    
+    def store(self, entry: MemoryEntry) -> None:
+        with self._lock:
+            if entry.agent_id not in self._memories:
+                self._memories[entry.agent_id] = {}
+            
+            self._memories[entry.agent_id][entry.key] = entry.to_dict()
+            self._save()
+    
+    def retrieve(self, agent_id: str, key: str) -> Optional[MemoryEntry]:
+        with self._lock:
+            if agent_id not in self._memories:
+                return None
+            
+            data = self._memories[agent_id].get(key)
+            if not data:
+                return None
+            
+            # Check expiration
+            if data.get('expires_at'):
+                expires_at = datetime.fromisoformat(data['expires_at'])
+                if datetime.now() > expires_at:
+                    del self._memories[agent_id][key]
+                    self._save()
+                    return None
+            
+            return MemoryEntry(
+                id=data['id'],
+                agent_id=data['agent_id'],
+                key=data['key'],
+                value=data['value'],
+                timestamp=datetime.fromisoformat(data['timestamp']),
+                metadata=data.get('metadata', {}),
+                expires_at=datetime.fromisoformat(data['expires_at']) if data.get('expires_at') else None
+            )
+    
+    def retrieve_all(self, agent_id: str, limit: Optional[int] = None) -> List[MemoryEntry]:
+        with self._lock:
+            if agent_id not in self._memories:
+                return []
+            
+            entries = []
+            for key, data in self._memories[agent_id].items():
+                # Check expiration
+                if data.get('expires_at'):
+                    expires_at = datetime.fromisoformat(data['expires_at'])
+                    if datetime.now() > expires_at:
+                        continue
+                
+                entries.append(MemoryEntry(
+                    id=data['id'],
+                    agent_id=data['agent_id'],
+                    key=data['key'],
+                    value=data['value'],
+                    timestamp=datetime.fromisoformat(data['timestamp']),
+                    metadata=data.get('metadata', {}),
+                    expires_at=datetime.fromisoformat(data['expires_at']) if data.get('expires_at') else None
+                ))
+            
+            # Sort by timestamp
+            entries.sort(key=lambda x: x.timestamp, reverse=True)
+            
+            if limit:
+                entries = entries[:limit]
+            
+            return entries
+    
+    def delete(self, agent_id: str, key: str) -> None:
+        with self._lock:
+            if agent_id in self._memories and key in self._memories[agent_id]:
+                del self._memories[agent_id][key]
+                self._save()
+    
+    def clear(self, agent_id: str) -> None:
+        with self._lock:
+            if agent_id in self._memories:
+                del self._memories[agent_id]
+                self._save()
+    
+    def search(self, agent_id: str, query: str, limit: int = 10) -> List[MemoryEntry]:
+        """Simple keyword search"""
+        entries = self.retrieve_all(agent_id)
+        query_lower = query.lower()
+        
+        # Filter entries containing query
+        matching = [
+            e for e in entries
+            if query_lower in str(e.value).lower() or query_lower in str(e.metadata).lower()
+        ]
+        
+        return matching[:limit]
+
+
+# Export new backends
+__all__ = [
+    'MemoryEntry',
+    'MemoryStore',
+    'InMemoryStore',
+    'SQLiteMemoryStore',
+    'RedisMemoryStore',
+    'PostgresMemoryStore',
+    'MongoDBMemoryStore',
+    'JSONFileMemoryStore',
+    'MemoryManager',
+    'get_memory_manager',
+    'set_memory_manager',
+]

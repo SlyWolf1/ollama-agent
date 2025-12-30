@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File search agent with Qdrant vector store integration
 - Web search agent with DuckDuckGo integration
 - Collaborative multi-agent examples
+- **Advanced orchestration patterns**: Sequential, Parallel, Hierarchical, Consensus, Debate, Pipeline
+- **Web UI** for agent management with Flask
+- **Built-in tools**: File, Web, System, Data, and Text tools
+- **Performance optimizations**: LRU cache, request batching, connection pooling, response caching
+- **New memory backends**: MongoDB and JSON file storage
+- 20+ ready-to-use tools across 5 categories
+- AgentOrchestrator for coordinating multiple agents
+- AgentManager for web UI agent management
 
 ### Changed
 - Merged `agent.py` and `enhanced_agent.py` into single unified agent
