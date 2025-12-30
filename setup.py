@@ -11,7 +11,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="ollama-agents-sdk",
-    version="0.3.0",
+    version="0.4.0",
     author="Brian Manda",
     author_email="brianmanda44@gmail.com",
     description="Advanced Ollama agent framework with multi-agent collaboration, tool calling, web search, and thinking modes",

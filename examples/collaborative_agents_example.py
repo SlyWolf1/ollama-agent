@@ -20,22 +20,17 @@ import json
 # ============================================================================
 
 # Enable comprehensive logging (disabled by default)
-# Uncomment these lines to enable detailed logging:
-# enable_logging()
-# set_global_log_level(LogLevel.DEBUG)  # Show all log messages
-# set_global_tracing_level(TraceLevel.VERBOSE)  # Detailed tracing
-# enable_stats()  # Track statistics
+# To enable detailed logging, uncomment these lines:
+enable_logging()
+set_global_log_level(LogLevel.DEBUG)  # Show all log messages
+set_global_tracing_level(TraceLevel.VERBOSE)  # Detailed tracing
+enable_stats()  # Track statistics
 
 # Get logger instance
 logger = get_logger()
 logger.info("=" * 80)
 logger.info("COLLABORATIVE AGENTS EXAMPLE - STARTING")
 logger.info("=" * 80)
-
-# For this demo, let's enable logging to show what's happening
-enable_logging()
-set_global_log_level(LogLevel.INFO)  # INFO level for cleaner output
-enable_stats()
 
 
 # ============================================================================
@@ -211,11 +206,8 @@ Available tools:
 - get_document_by_id: Retrieve specific documents
 - list_collections: Check available collections""",
         tools=[search_vector_store, get_document_by_id, list_collections],
-        settings=ModelSettings(
-            # thinking_mode=ThinkingMode.MEDIUM,
-            temperature=0.3,
-            max_tokens=1000
-        ),
+        temperature=0.3,
+        max_tokens=1000,
         timeout=60,
         enable_tracing=True,
         trace_level=TraceLevel.VERBOSE
@@ -293,10 +285,8 @@ You should handle queries about:
 
 Use the web_search tool to get actual search results, then synthesize them into a helpful response.""",
         tools=[web_search],
-        settings=ModelSettings(
-            temperature=0.4,
-            max_tokens=1000
-        ),
+        temperature=0.4,
+        max_tokens=1000,
         timeout=60,
         enable_tracing=True,
         trace_level=TraceLevel.VERBOSE
@@ -305,11 +295,6 @@ Use the web_search tool to get actual search results, then synthesize them into 
     logger.info(f"✅ Web search agent created: {agent.name}")
     logger.info(f"   Using DuckDuckGo + Playwright")
     logger.debug(f"   Model: {agent.model}")
-    logger.debug(f"   Tracing: {agent.enable_tracing}")
-    
-    return agent
-    logger.debug(f"   Model: {agent.model}")
-    logger.debug(f"   API Key provided: {bool(api_key)}")
     logger.debug(f"   Tracing: {agent.enable_tracing}")
     
     return agent
@@ -334,7 +319,7 @@ def create_triage_agent(file_agent: Agent, web_agent: Agent) -> Agent:
         response = file_agent.chat(query)
         content = response.get('content', 'No response from file search agent')
         logger.info(f"✅ File search agent responded ({len(content)} chars)")
-        logger.debug(f"Full response: {content}")
+        logger.debug(f"Response preview: {content[:200]}...")
         
         # Return the complete response so triage agent can show it
         return content
@@ -354,7 +339,7 @@ def create_triage_agent(file_agent: Agent, web_agent: Agent) -> Agent:
         response = web_agent.chat(query)
         content = response.get('content', 'No response from web search agent')
         logger.info(f"✅ Web search agent responded ({len(content)} chars)")
-        logger.debug(f"Full response: {content}")
+        logger.debug(f"Response preview: {content[:200]}...")
         
         # Return the complete response so triage agent can show it
         return content
@@ -396,17 +381,15 @@ When presenting responses:
 - Format the response clearly for the user
 
 Example flow:
-User: "Tell me about TFG job shadowing"
-You: *Call route_to_file_search with "TFG job shadowing"*
-Tool returns: "Based on our documents, TFG job shadowing involves..."
-You present: "Based on our internal documents: TFG job shadowing involves..."
+User: "Tell me about employee onboarding process"
+You: *Call route_to_file_search with "employee onboarding process"*
+Tool returns: "Based on our documents, employee onboarding involves..."
+You present: "Based on our internal documents: Employee onboarding involves..."
 
-Remember: The routing tools return the FINAL ANSWER. Don't route again!"""
+Remember: The routing tools return the FINAL ANSWER. Don't route again!""",
         tools=[route_to_file_search, route_to_web_search],
-        settings=ModelSettings(
-            temperature=0.2,
-            max_tokens=2000
-        ),
+        temperature=0.2,
+        max_tokens=2000,
         timeout=120,
         enable_tracing=True,
         trace_level=TraceLevel.VERBOSE
@@ -544,7 +527,13 @@ def run_collaborative_example():
             logger.info(f"User query: {user_query}")
             print(f"\n🔄 Processing with triage agent...")
             response = triage_agent.chat(user_query)
-            print(f"\n🤖 Response:\n{response['content']}")
+            
+            # Show the response
+            print(f"\n🤖 Response:")
+            print("-" * 80)
+            print(response['content'])
+            print("-" * 80)
+            
             logger.info("Query completed successfully")
             
         except KeyboardInterrupt:
@@ -623,13 +612,9 @@ def test_web_search_agent():
     for query in test_queries:
         print(f"Query: {query}")
         print("-" * 80)
-        if brave_api_key:
-            # Uncomment to actually run:
-            # response = agent.chat(query)
-            # print(f"Response: {response['content']}")
-            pass
-        else:
-            print("⚠️  Skipping - no API key provided")
+        # Uncomment to actually run:
+        # response = agent.chat(query)
+        # print(f"Response: {response['content']}")
         print()
 
 
